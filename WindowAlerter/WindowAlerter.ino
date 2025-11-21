@@ -210,6 +210,7 @@ void loop() {
         if (pressed == 0 && buttonLastPressed + 350 < millis()) {
           sendMQTTMessage(alarm_topic, "MUTE");
           buttonLastPressed = millis();
+          turnOffAlert();
         }
         break;
       }
