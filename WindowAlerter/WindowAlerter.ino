@@ -1,15 +1,3 @@
-/*
-  ArduinoMqttClient - WiFi Simple Sender
-
-  This example connects to a MQTT broker and publishes a message to
-  a state_topic once a second.
-
-  The circuit:
-  - Arduino MKR 1000, MKR 1010 or Uno WiFi Rev2 board
-
-  This example code is in the public domain.
-*/
-
 #include <ArduinoMqttClient.h>
 #if defined(ARDUINO_SAMD_MKRWIFI1010) || defined(ARDUINO_SAMD_NANO_33_IOT) || defined(ARDUINO_AVR_UNO_WIFI_REV2)
 #include <WiFiNINA.h>
@@ -50,7 +38,7 @@ enum States { WINDOW_OPEN,
               WINDOW_CLOSED };
 States state;
 
-unsigned long toime;
+unsigned long second_ticker;
 unsigned long buttonLastPressed = 0;
 
 States prev_state = WINDOW_OPEN;
@@ -72,7 +60,7 @@ const long interval = 1000;
 int count = 0;
 
 void setup() {
-  toime = millis();
+  second_ticker = millis();
 
 
   //Initialize serial and wait for port to open:
@@ -183,12 +171,13 @@ void loop() {
   String msg = "";
   msg = receiveMQTTMessage();
 
-  if (msg != lastReceivedMessage){
-    Serial.println(msg);
-    Serial.println();
-  }
 
   if (msg.length() > 0) {
+    if (msg != lastReceivedMessage) {
+      Serial.println();
+      Serial.println(msg);
+      Serial.println();
+    }
     if (msg == W_OPEN) {
       state = WINDOW_OPEN;
     } else if (msg == W_CLOSED) {
@@ -198,6 +187,12 @@ void loop() {
       inAlarmMode = true;
     }
     lastReceivedMessage = msg;
+  } else {
+    if (second_ticker + 2000 < millis()) {
+      // print
+      Serial.print(".");
+      second_ticker = millis();
+    }
   }
 
   switch (state) {
@@ -226,10 +221,10 @@ void loop() {
       }
   }
   if (DEBUG_MODE == true) {
-    if ((toime + 1000 < millis()) || (state != prev_state)) {
+    if ((second_ticker + 1000 < millis()) || (state != prev_state)) {
       Serial.print("State: ");
       Serial.println(state);
-      toime = millis();
+      second_ticker = millis();
       prev_state = state;
     }
   }
