@@ -34,15 +34,15 @@ char pass[] = SECRET_PASS;  // your network password (use for WPA, or use as key
 #define BUZZER_PIN 9
 #define BUTTON_PIN 2
 
+#define DEBUG_MODE false
+
 const char state_topic[] = "WINDOW_STATE";
 char alarm_topic[] = "WINDOW_ALARM";
 const String W_OPEN = "OPEN";
 const String W_CLOSED = "CLOSED";
 const String W_ALARM = "ALARM";
 
-const int minutesTillAlert = 1;
-
-
+String lastReceivedMessage = "";
 
 bool inAlarmMode = false;
 
@@ -51,6 +51,8 @@ enum States { WINDOW_OPEN,
 States state;
 
 unsigned long toime;
+unsigned long buttonLastPressed = 0;
+
 States prev_state = WINDOW_OPEN;
 
 // To connect with SSL/TLS:
@@ -112,15 +114,14 @@ void setup() {
   Serial.println("You're connected to the MQTT broker!");
   Serial.println();
 
-  Serial.print("Subscribing to state_topic: ");
-  Serial.println(state_topic);
+  Serial.println("Subscribing to topics...");
   mqttClient.subscribe(state_topic);
   mqttClient.subscribe(alarm_topic);
 
-  Serial.print("Waiting for messages on state_topic: ");
-  Serial.println(state_topic);
+  Serial.println("Waiting for messages on topics... ");
   Serial.println();
 
+  //set initial state
   state = WINDOW_CLOSED;
 }
 
@@ -131,7 +132,6 @@ void sendMQTTMessage(char* state_topic, char* msg) {
   Serial.print(" ");
   Serial.print(msg);
 
-  // send message, the Print interface can be used to set the message contents
   mqttClient.beginMessage(state_topic);
   mqttClient.print(msg);
   mqttClient.endMessage();
@@ -143,19 +143,18 @@ String receiveMQTTMessage() {
   int messageSize = mqttClient.parseMessage();
   String message = "";
   if (messageSize > 0) {
-    // we received a message, collect the contents
-    String state_topic = mqttClient.messageTopic();
-    Serial.print("\nReceived a message with state_topic '" + state_topic + "', length " + String(messageSize) + " bytes:\n");
+    String msg_topic = mqttClient.messageTopic();
+    //Serial.print("\nReceived a message with state_topic '" + msg_topic + "', length " + String(messageSize) + " bytes:\n");
 
     while (mqttClient.available()) {
       message += (char)mqttClient.read();
     }
-    Serial.println(message);
+    //Serial.println(message);
   }
-  return message;  // Return the message content
+  return message;
 }
 
-int checkButtonPressed(){
+int checkButtonPressed() {
   return digitalRead(BUTTON_PIN);
 }
 
@@ -184,6 +183,11 @@ void loop() {
   String msg = "";
   msg = receiveMQTTMessage();
 
+  if (msg != lastReceivedMessage){
+    Serial.println(msg);
+    Serial.println();
+  }
+
   if (msg.length() > 0) {
     if (msg == W_OPEN) {
       state = WINDOW_OPEN;
@@ -193,6 +197,7 @@ void loop() {
     } else if (msg == W_ALARM) {
       inAlarmMode = true;
     }
+    lastReceivedMessage = msg;
   }
 
   switch (state) {
@@ -205,25 +210,27 @@ void loop() {
         }
 
         int pressed = checkButtonPressed();
-        Serial.print("BTN PRESSED ");
-        Serial.println(pressed);
-        delay(500);
-        if (pressed == 0){
+        //Serial.print("BTN PRESSED ");
+        //Serial.println(pressed);
+        if (pressed == 0 && buttonLastPressed + 350 < millis()) {
           sendMQTTMessage(alarm_topic, "MUTE");
+          buttonLastPressed = millis();
         }
         break;
       }
     case (WINDOW_CLOSED):
-      { 
+      {
         inAlarmMode = false;
         toggleLED(false);
         break;
       }
   }
-  if ((toime + 1000 < millis()) || (state != prev_state) ) {
-    Serial.print("State: ");
-    Serial.println(state);
-    toime = millis();
-    prev_state = state;
+  if (DEBUG_MODE == true) {
+    if ((toime + 1000 < millis()) || (state != prev_state)) {
+      Serial.print("State: ");
+      Serial.println(state);
+      toime = millis();
+      prev_state = state;
+    }
   }
 }
