@@ -1,243 +1,184 @@
-/*
-  ArduinoMqttClient - WiFi Simple Sender
 
-  This example connects to a MQTT broker and publishes a message to
-  a state_topic once a second.
-
-  The circuit:
-  - Arduino MKR 1000, MKR 1010 or Uno WiFi Rev2 board
-
-  This example code is in the public domain.
-*/
-
-#include <ArduinoMqttClient.h>
-#if defined(ARDUINO_SAMD_MKRWIFI1010) || defined(ARDUINO_SAMD_NANO_33_IOT) || defined(ARDUINO_AVR_UNO_WIFI_REV2)
-#include <WiFiNINA.h>
-#elif defined(ARDUINO_SAMD_MKR1000)
-#include <WiFi101.h>
-#elif defined(ARDUINO_ARCH_ESP8266)
-#include <ESP8266WiFi.h>
-#elif defined(ARDUINO_PORTENTA_H7_M7) || defined(ARDUINO_NICLA_VISION) || defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_GIGA) || defined(ARDUINO_OPTA)
-#include <WiFi.h>
-#elif defined(ARDUINO_PORTENTA_C33)
-#include <WiFiC3.h>
-#elif defined(ARDUINO_UNOR4_WIFI)
-#include <WiFiS3.h>
-#endif
-
-#include "arduino_secrets.h"
-///////please enter your sensitive data in the Secret tab/arduino_secrets.h
-char ssid[] = SECRET_SSID;  // your network SSID (name)
-char pass[] = SECRET_PASS;  // your network password (use for WPA, or use as key for WEP)
-
-#define LED_PIN 10
-#define BUZZER_PIN 9
-#define BUTTON_PIN 2
-
-#define DEBUG_MODE false
-
-const char state_topic[] = "WINDOW_STATE";
-char alarm_topic[] = "WINDOW_ALARM";
-const String W_OPEN = "OPEN";
-const String W_CLOSED = "CLOSED";
-const String W_ALARM = "ALARM";
-
-String lastReceivedMessage = "";
-
-bool inAlarmMode = false;
-
-enum States { WINDOW_OPEN,
-              WINDOW_CLOSED };
-States state;
-
-unsigned long second_ticker;
-unsigned long buttonLastPressed = 0;
-
-States prev_state = WINDOW_OPEN;
-
-// To connect with SSL/TLS:
-// 1) Change WiFiClient to WiFiSSLClient.
-// 2) Change port value from 1883 to 8883.
-// 3) Change broker value to a server with a known SSL/TLS root certificate
-//    flashed in the WiFi module.
-
-WiFiClient wifiClient;
-MqttClient mqttClient(wifiClient);
+#include <WiFiNINA.h>           // Wifi Client Library für Nano 33 IoT Board
+#include <ArduinoMqttClient.h>  // MQTT Bibliothek, ggf. über Sketch / Include Librar / Manage Libraries nachinstallieren
+// WiFi Zugangsdaten lagen - Das Mico-B Kurs Netzwerk ist vorkonfiguriert
+#include "wifi_secrets.h"
 
 const char broker[] = "192.168.37.4";
-int port = 1883;
+const int port = 1883;
+// Ein einfaches Topic ... nur eins zum Senden und Empfangen. Ist langweilig aber soll nur zeigen wie es geht
+const char topic[] = "micob/Fensterwarner/Status";
+// Digital Input PIN
+#define D_PIN 13
+#define D_PIN2 12
+unsigned long y = 0;
+enum States { WINDOW_OPEN,
+              WINDOW_CLOSED };
+States states = WINDOW_OPEN;
 
-const long interval = 1000;
-
-int count = 0;
-
-void setup() {
-  second_ticker = millis();
-
-
-  //Initialize serial and wait for port to open:
-  Serial.begin(9600);
-  while (!Serial) {
-    ;  // wait for serial port to connect. Needed for native USB port only
-  }
-
-  // attempt to connect to WiFi network:
-  Serial.print("Attempting to connect to WPA SSID: ");
-  Serial.println(ssid);
-  while (WiFi.begin(ssid, pass) != WL_CONNECTED) {
-    // failed, retry
-    Serial.print(".");
-    delay(10000);
-  }
-
-  Serial.println("You're connected to the network");
-  Serial.println();
-
-  // You can provide a unique client ID, if not set the library uses Arduino-millis()
-  // Each client must have a unique client ID
-  // mqttClient.setId("clientId");
-
-  // You can provide a username and password for authentication
-  // mqttClient.setUsernamePassword("username", "password");
-
-  Serial.print("Attempting to connect to the MQTT broker: ");
-  Serial.println(broker);
-
-  if (!mqttClient.connect(broker, port)) {
-    Serial.print("MQTT connection failed! Error code = ");
-    Serial.println(mqttClient.connectError());
-
-    while (1)
-      ;
-  }
-
-  Serial.println("You're connected to the MQTT broker!");
-  Serial.println();
-
-  Serial.println("Subscribing to topics...");
-  mqttClient.subscribe(state_topic);
-  mqttClient.subscribe(alarm_topic);
-
-  Serial.println("Waiting for messages on topics... ");
-  Serial.println();
-
-  //set initial state
-  state = WINDOW_CLOSED;
-}
+unsigned long state_ticker;
 
 
-void sendMQTTMessage(char* state_topic, char* msg) {
-  Serial.print("Sending message to topic: ");
-  Serial.println(state_topic);
-  Serial.print(" ");
-  Serial.print(msg);
+WiFiClient client;              // Wifi Client
+MqttClient mqttClient(client);  // MQTT Client, an Wifi gebunden
 
-  mqttClient.beginMessage(state_topic);
-  mqttClient.print(msg);
-  mqttClient.endMessage();
+unsigned long lastConnectionTime = 0;               // Stand millies Zähler bei letztem Update
+const unsigned long postingInterval = 10L * 1000L;  // Post data every 10 seconds.
 
-  Serial.println();
+// Message callback Funktion
+void onMqttMessage(int /*messageSize*/) {
+  // we received a message, print out the topic and contents
+  Serial.print("Received a message with topic '");
+  Serial.print(mqttClient.messageTopic());
+
+  Serial.print("', value = ");
+  const float zahl = mqttClient.parseFloat();
+  Serial.println(zahl);
 }
 
 String receiveMQTTMessage() {
   int messageSize = mqttClient.parseMessage();
   String message = "";
   if (messageSize > 0) {
-    String msg_topic = mqttClient.messageTopic();
-    //Serial.print("\nReceived a message with state_topic '" + msg_topic + "', length " + String(messageSize) + " bytes:\n");
+    // we received a message, collect the contents
+    String state_topic = mqttClient.messageTopic();
+    Serial.print("\nReceived a message with state_topic '" + state_topic + "', length " + String(messageSize) + " bytes:\n");
 
     while (mqttClient.available()) {
       message += (char)mqttClient.read();
     }
-    //Serial.println(message);
+    Serial.println(message);
   }
-  return message;
+  return message;  // Return the message content
 }
 
-int checkButtonPressed() {
-  return digitalRead(BUTTON_PIN);
-}
-
-void toggleLED(bool state) {
-  if (state == false) {
-    analogWrite(LED_PIN, 0);
-  } else {
-    analogWrite(LED_PIN, 255);
+void setup() {
+  delay(200);  // Manchmal hängen die Nano IoT Boards im Startup fest und lassen sich nicht mehr ansprechen
+  Serial.begin(9600);
+  while (!Serial) {
+    ;  // wait for serial port to connect. Needed for native USB port only
   }
+  Serial.println("Mico-B Beispiel Projekt");
+
+
+
+  //Initialize serial and wait for port to WINDOW_OPEN:
+  // print some greedings with ending line break
+  Serial.println("Digital read (count)");
+  // input with pullup resistor
+  pinMode(D_PIN, INPUT_PULLUP);
+  pinMode(D_PIN2, OUTPUT);
+
+  state_ticker = millis();
+
+  // attacht interrupt
+  attachInterrupt(digitalPinToInterrupt(D_PIN), stateChange, CHANGE);
 }
 
-void soundAlert() {
-  Serial.println("Sounding Alert");
-  analogWrite(BUZZER_PIN, 255);
+volatile int count = 0;
+int last_count = count;
+
+void stateChange() {
+  count++;
 }
 
-void turnOffAlert() {
-  analogWrite(BUZZER_PIN, 0);
-}
 
 void loop() {
-  // call poll() regularly to allow the library to send MQTT keep alives which
-  // avoids being disconnected by the broker
-  mqttClient.poll();
+  // Reconnect to WiFi if not connected
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Try WiFi connection ...");
+    WiFi.begin(SECRET_SSID, SECRET_PASS);  // Connect to WPA/WPA2 Wi-Fi network.
+    delay(4000);
+  }
+  // Reconnect if MQTT client is not connected.
+  while (!mqttClient.connected()) {
+    Serial.println("Try MQTT connection ... ");
+    mqttClient.connect(broker, port);
+    delay(1000);
+    // subscribe to a topic after connection
+    mqttClient.subscribe(topic);
+    mqttClient.subscribe("WINDOW_ALARM");
+  }
 
-  String msg = "";
-  msg = receiveMQTTMessage();
+  mqttClient.poll();  // Call the loop continuously
 
+  bool MUTE_STATE;
+  // send message, the Print interface can be used to set the message contents
 
-  if (msg.length() > 0) {
-    if (msg != lastReceivedMessage) {
+  if (count != last_count) {
+    y = millis();
+    Serial.println(count);
+    last_count = count;
+    int x = digitalRead(D_PIN);
+    Serial.print(x);
+    digitalWrite(D_PIN2, !x);
+    if (x == 1) {
+      Serial.println("switchtoopen");
+      states = WINDOW_OPEN;
+      mqttClient.beginMessage("WINDOW_STATE");
+      mqttClient.print("OPEN");
+      mqttClient.endMessage();
       Serial.println();
+
+    } else {
+      states = WINDOW_CLOSED;
+      MUTE_STATE=false;
+      mqttClient.beginMessage("WINDOW_STATE");
+      mqttClient.print("CLOSED");
+      mqttClient.endMessage();
+      Serial.println();
+      Serial.println("switchtoclose");
+    }
+  }
+
+    String msg = "";
+
+    unsigned long cur_time = 0;
+    msg = receiveMQTTMessage();
+    if (msg == "MUTE") {
+      cur_time = millis();
+      MUTE_STATE = true;
       Serial.println(msg);
+    }
+
+
+
+    switch (states) {
+      case WINDOW_OPEN:
+        if (y + 10000 <= millis()) {
+          y = y + 5000;
+          if ((MUTE_STATE == false) || (cur_time + 10000 * 5 <= millis())) {
+            Serial.println("WINDOW_ALARM");
+            mqttClient.beginMessage("WINDOW_ALARM");
+            mqttClient.print("ALARM");
+            mqttClient.endMessage();
+            Serial.println();
+          }else{
+            Serial.print("Muted ");
+            Serial.println(MUTE_STATE);
+          }
+        }
+        break;
+      case WINDOW_CLOSED:
+        break;
+    }
+
+    if (state_ticker + 1000 < millis()) {
+      String cur_state = "";
+      if (states == WINDOW_OPEN) {
+        cur_state = "OPEN";
+      } else {
+        cur_state = "CLOSED";
+      }
+
+      Serial.print(msg);
+
+      Serial.println(cur_state);
+      mqttClient.beginMessage("WINDOW_STATE");
+      mqttClient.print(cur_state);
+      mqttClient.endMessage();
       Serial.println();
-    }
-    if (msg == W_OPEN) {
-      state = WINDOW_OPEN;
-    } else if (msg == W_CLOSED) {
-      turnOffAlert();
-      state = WINDOW_CLOSED;
-    } else if (msg == W_ALARM) {
-      inAlarmMode = true;
-    }
-    lastReceivedMessage = msg;
-  } else {
-    if (second_ticker + 2000 < millis()) {
-      // print
-      Serial.print(".");
-      second_ticker = millis();
-    }
-  }
 
-  switch (state) {
-    case (WINDOW_OPEN):
-      {
-        toggleLED(true);
-        if (inAlarmMode) {
-          soundAlert();
-          inAlarmMode = false;
-        }
-
-        int pressed = checkButtonPressed();
-        //Serial.print("BTN PRESSED ");
-        //Serial.println(pressed);
-        if (pressed == 0 && buttonLastPressed + 350 < millis()) {
-          sendMQTTMessage(alarm_topic, "MUTE");
-          buttonLastPressed = millis();
-        }
-        break;
-      }
-    case (WINDOW_CLOSED):
-      {
-        inAlarmMode = false;
-        toggleLED(false);
-        break;
-      }
-  }
-  if (DEBUG_MODE == true) {
-    if ((second_ticker + 1000 < millis()) || (state != prev_state)) {
-      Serial.print("State: ");
-      Serial.println(state);
-      second_ticker = millis();
-      prev_state = state;
+      state_ticker = millis();
     }
   }
-}
